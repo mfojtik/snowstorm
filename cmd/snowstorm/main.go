@@ -1,4 +1,4 @@
-package snowstorm
+package main
 
 import (
 	"crypto/sha256"
@@ -6,6 +6,8 @@ import (
 	"flag"
 	"fmt"
 	"net/http"
+	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,7 +25,7 @@ var (
 	numWorkers = 8
 
 	// interval is how often we run the scrubbing name
-	interval = 60 * time.Minute
+	interval = 1800 * time.Second
 
 	// minFlakeJobFailures is the minimum number of failures required to consider the
 	// test failure as a 'flake'
@@ -31,14 +33,15 @@ var (
 
 	// config lists the job names we want to scape and the depth (
 	// number of pages) we want to go back when listing builds.
+	// TODO: Make this config
 	config = map[string]int{
-		"test_branch_origin_extended_conformance_install":        5,
-		"test_branch_origin_extended_conformance_install_update": 5,
-		"test_branch_origin_extended_conformance_gce":            5,
-		"test_pull_request_origin_unit":                          5,
-		"test_branch_request_origin_integration":                 5,
-		"test_branch_request_origin_cmd":                         5,
-		"test_branch_request_origin_end_to_end":                  5,
+		"test_pull_request_origin_integration":                         5,
+		"test_pull_request_origin_unit":                                5,
+		"test_pull_request_origin_end_to_end":                          5,
+		"test_pull_request_origin_cmd":                                 5,
+		"test_pull_request_origin_extended_conformance_gce":            5,
+		"test_pull_request_origin_extended_conformance_install":        5,
+		"test_pull_request_origin_extended_conformance_install_update": 5,
 	}
 )
 
@@ -181,7 +184,11 @@ func GetBuildFailedTests(b Job) ([]BuildFailure, error) {
 func GetJobBuilds(jobName string) ([]Job, string, error) {
 	// TODO: make this generic?
 	baseUrl := "https://openshift-gce-devel.appspot.com"
-	buildListUrl := strings.Join([]string{baseUrl, "builds/origin-ci-test/logs", jobName}, "/")
+	buildListUrl := strings.Join([]string{
+		baseUrl,
+		"builds/origin-ci-test/pr-logs/directory",
+		jobName,
+	}, "/")
 	doc, err := goquery.NewDocument(buildListUrl)
 	if err != nil {
 		return nil, "", err
@@ -208,6 +215,12 @@ func GetJobBuilds(jobName string) ([]Job, string, error) {
 	}
 	return builds, builds[len(builds)-1].buildNumber, nil
 }
+
+type ByCount []FlakeSerializable
+
+func (a ByCount) Len() int           { return len(a) }
+func (a ByCount) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByCount) Less(i, j int) bool { return a[i].FailedJobsCount < a[j].FailedJobsCount }
 
 func serializeFlakes() ([]byte, error) {
 	defer fMutex.RUnlock()
@@ -242,6 +255,7 @@ func serializeFlakes() ([]byte, error) {
 			result.Items = append(result.Items, f)
 		}
 	}
+	sort.Reverse(ByCount(result.Items))
 	return json.Marshal(&result)
 }
 
@@ -297,8 +311,30 @@ func getFlakesForJob(name string, depth int) error {
 	return nil
 }
 
+func Usage() {
+	fmt.Fprintf(os.Stderr, `
+Usage: %s [-interval <sec>] [-workers <sec>] [-min-flake-failures <sec>]
+`, os.Args[0])
+	flag.PrintDefaults()
+}
+
 func main() {
+	minFlakeFailuresFlag := flag.Uint("min-flake-failures", 2, "minumum failures to consider a flake")
+	intervalFlag := flag.Uint("interval", 3600, "interval in seconds to run scrapper")
+	workersFlag := flag.Uint("workers", 8, "interval in seconds to run scrapper")
+
+	flag.Usage = Usage
 	flag.Parse()
+
+	if minFlakeFailuresFlag != nil {
+		minFlakeJobFailures = int(*minFlakeFailuresFlag)
+	}
+	if intervalFlag != nil {
+		interval = time.Second * time.Duration(*intervalFlag)
+	}
+	if workersFlag != nil {
+		numWorkers = int(*workersFlag)
+	}
 
 	go func() {
 		for {
@@ -324,6 +360,8 @@ func main() {
 	// Start server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/flakes.json", flakeHandler)
+	mux.Handle("/", http.FileServer(http.Dir("./static")))
+
 	addr := "0.0.0.0:8080"
 	glog.Infof("Listening on %s ...", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/patternfly/3.24.0/css/patternfly.min.css">
+    <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/patternfly/3.24.0/css/patternfly-additions.min.css">
+    <script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
+    <script src="jquery.timeago.js"></script>
+    <title>Snowstorm</title>
+</head>
+<body>
+<div class="container">
+<table class="table table-striped table-bordered">
+    <thead>
+    <tr><th>Test Case</th><th>Count</th><th>First Failure</th><th>Last Failure</th></tr>
+    </thead>
+    <tbody id="data">
+    </tbody>
+</table>
+</div>
+</body>
+<script type="application/javascript">
+function getFlakes() {
+    return $.getJSON("flakes.json").then(function (data) {
+        return data.items;
+    });
+}
+
+String.prototype.trimToLength = function(m) {
+  return (this.length > m)
+    ? jQuery.trim(this).substring(0, m).split(" ").slice(0, -1).join(" ") + "..."
+    : this;
+};
+
+getFlakes().done(function (items) {
+    $.each(items, function( index, flake) {
+        flake.message = flake.message.replace('github.com/openshift/origin/test/integration/runner','')
+        flake.message = flake.message.replace('github.com/openshift/origin/test/cmd/util/','')
+        $('tbody#data').prepend('<tr>'+
+        '<td title="'+flake.message+'"><a href="'+flake.lastFailureUrl+'">'+flake.message.trimToLength(140)+'</a></td>'+
+        '<td>'+flake.failedJobsCount+'</td>'+
+        '<td><abbr class="timeago" title="'+flake.firstFailure+'"></abbr></td>'+
+        '<td><abbr class="timeago" title="'+flake.lastFailure+'"></abbr></td>'+
+        '</tr>');
+        $("abbr.timeago").timeago();
+    });
+});
+
+
+$(document).on('pageinit',function(){
+    getFlakes();
+});
+</script>
+</html>
