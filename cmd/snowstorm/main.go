@@ -1,4 +1,4 @@
-package main
+package snowstorm
 
 import (
 	"crypto/sha256"
@@ -19,64 +19,98 @@ var (
 	flakes = map[string]Flake{}
 	fMutex sync.RWMutex
 
+	// numWorkers is how much parallel we want to be
 	numWorkers = 8
-	interval   = 60 * time.Minute
+
+	// interval is how often we run the scrubbing name
+	interval = 60 * time.Minute
+
+	// minFlakeJobFailures is the minimum number of failures required to consider the
+	// test failure as a 'flake'
+	minFlakeJobFailures = 2
+
+	// config lists the job names we want to scape and the depth (
+	// number of pages) we want to go back when listing builds.
+	config = map[string]int{
+		"test_branch_origin_extended_conformance_install":        5,
+		"test_branch_origin_extended_conformance_install_update": 5,
+		"test_branch_origin_extended_conformance_gce":            5,
+		"test_pull_request_origin_unit":                          5,
+		"test_branch_request_origin_integration":                 5,
+		"test_branch_request_origin_cmd":                         5,
+		"test_branch_request_origin_end_to_end":                  5,
+	}
 )
 
+// FlakeSerializable is serializable version of the 'flake'
 type FlakeSerializable struct {
-	ID             string    `json:"id"`
-	JobName        string    `json:"jobName"`
-	Message        string    `json:"message"`
-	FirstFailure   time.Time `json:"firstFailure"`
-	LastFailure    time.Time `json:"lastFailure"`
-	FailedJobs     []string  `json:"failedJobs"`
-	LastFailureUrl string    `json:"lastFailureUrl"`
+	// JobName is the name of the name (eg. _unit, _integration, etc.)
+	JobName string `json:"jobName"`
+	// Message is the failure message
+	Message string `json:"message"`
+	// FirstFailure is when we observed this failure for the first time
+	FirstFailure time.Time `json:"firstFailure"`
+	// LastFailure is the last time we observed this failure
+	LastFailure time.Time `json:"lastFailure"`
+	// FailedJobs is a list of jobs where this failure was observed
+	FailedJobs []string `json:"failedJobs"`
+	// FailedJobsCount is total count of FailedJobs
+	FailedJobsCount int `json:"failedJobsCount"`
+	// LastFailureUrl points to last failed name URL
+	LastFailureUrl string `json:"lastFailureUrl"`
 }
 
+// FlakesSerializable is serializable version of list of flakes.
 type FlakesSerializable struct {
 	Count       int                 `json:"count"`
 	Items       []FlakeSerializable `json:"items"`
 	LastUpdated time.Time           `json:"lastUpdated"`
 }
 
-type Build struct {
-	job   string
-	jobID string
-	url   string
+// Job represents an instance of the jenkins job.
+type Job struct {
+	// Jenkins job name
+	name        string
+	buildNumber string
+	url         string
 }
 
-func (b Build) Exists() bool {
+// Exists checks if the job is already recorded as a flake.
+func (b Job) Exists() bool {
 	defer fMutex.RUnlock()
 	fMutex.RLock()
 	for _, flake := range flakes {
-		if flake.HasJob(b.jobID) {
+		if flake.HasJob(b.buildNumber) {
 			return true
 		}
 	}
 	return false
 }
 
-type Failure struct {
+// BuildFailure represents a single build failure (test case failure)
+type BuildFailure struct {
 	message   string
 	timestamp time.Time
-	build     Build
+	build     Job
 }
 
-func (f Failure) Hash() string {
+// Hash generates a unique hash for the failure error messages (test case name)
+func (f BuildFailure) Hash() string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(f.message)))
 }
 
-func (f Failure) Record() {
+// Record records the failure into flakes
+func (f BuildFailure) Record() {
 	defer fMutex.Unlock()
 	fMutex.Lock()
 	flake, exists := flakes[f.Hash()]
 	// no-op, we already track this flake
-	if exists && flake.HasJob(f.build.jobID) {
+	if exists && flake.HasJob(f.build.buildNumber) {
 		return
 	}
 	// we tracking this flake, this is a new failure
 	if exists {
-		flake.failures[f.build.jobID] = f
+		flake.failures[f.build.buildNumber] = f
 		if f.timestamp.After(flake.lastFailedAt) {
 			flake.lastFailedAt = f.timestamp
 		}
@@ -86,26 +120,29 @@ func (f Failure) Record() {
 		flakes[f.Hash()] = flake
 		return
 	}
-	// new potential flake
+	// new flake
 	flakes[f.Hash()] = Flake{
-		failures:      map[string]Failure{f.build.jobID: f},
+		failures:      map[string]BuildFailure{f.build.buildNumber: f},
 		lastFailedAt:  f.timestamp,
 		firstFailedAt: f.timestamp,
 	}
 }
 
+// Flake group same failures and records last and first time of their occurrences.
 type Flake struct {
-	failures map[string]Failure
-
+	// a map of buildIDs and failures
+	failures      map[string]BuildFailure
 	lastFailedAt  time.Time
 	firstFailedAt time.Time
 }
 
+// HasJob checks if the flake already have the job recorded.
 func (f Flake) HasJob(jobID string) bool {
 	_, exists := f.failures[jobID]
 	return exists
 }
 
+// unixToTime converts unix epoch to *time.Time or nil of something goes wrong
 func unixToTime(s string) *time.Time {
 	timeInt, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
@@ -115,7 +152,7 @@ func unixToTime(s string) *time.Time {
 	return &t
 }
 
-func GetBuildFailedTests(b Build) ([]Failure, error) {
+func GetBuildFailedTests(b Job) ([]BuildFailure, error) {
 	doc, err := goquery.NewDocument(b.url)
 	if err != nil {
 		return nil, err
@@ -123,28 +160,26 @@ func GetBuildFailedTests(b Build) ([]Failure, error) {
 	meta := doc.Find(".build-meta").First()
 	timeEpoch, found := meta.Find(".timestamp").Attr("data-epoch")
 	if !found {
-		h, _ := meta.Html()
-		return nil, fmt.Errorf("unable to find metadata timestamp (%s)", h)
+		return nil, fmt.Errorf("unable to find metadata timestamp")
 	}
 	timestamp := unixToTime(strings.TrimSpace(timeEpoch))
 	if timestamp == nil {
 		return nil, fmt.Errorf("unable to get timestamp")
 	}
-	var failures []Failure
-
+	var failures []BuildFailure
 	doc.Find("#failures h3 a").Each(func(i int, s *goquery.Selection) {
 		s.ChildrenFiltered(".time").Remove()
-		failures = append(failures, Failure{
+		failures = append(failures, BuildFailure{
 			message:   strings.TrimSpace(s.Text()),
 			build:     b,
 			timestamp: *timestamp,
 		})
 	})
-
 	return failures, nil
 }
 
-func GetJobBuilds(jobName string) ([]Build, string, error) {
+func GetJobBuilds(jobName string) ([]Job, string, error) {
+	// TODO: make this generic?
 	baseUrl := "https://openshift-gce-devel.appspot.com"
 	buildListUrl := strings.Join([]string{baseUrl, "builds/origin-ci-test/logs", jobName}, "/")
 	doc, err := goquery.NewDocument(buildListUrl)
@@ -152,16 +187,16 @@ func GetJobBuilds(jobName string) ([]Build, string, error) {
 		return nil, "", err
 	}
 	jobNameParts := strings.Split(jobName, "?")
-	var builds []Build
+	var builds []Job
 	doc.Find(".build-number").Each(func(i int, s *goquery.Selection) {
 		link, found := s.Parent().Attr("href")
 		if !found || !s.Parent().ChildrenFiltered("span").HasClass("build-failure") {
 			return
 		}
-		b := Build{
-			jobID: strings.TrimSpace(s.Text()),
-			job:   jobNameParts[0],
-			url:   baseUrl + "/" + link,
+		b := Job{
+			buildNumber: strings.TrimSpace(s.Text()),
+			name:        jobNameParts[0],
+			url:         baseUrl + "/" + link,
 		}
 		if b.Exists() {
 			return
@@ -171,7 +206,7 @@ func GetJobBuilds(jobName string) ([]Build, string, error) {
 	if len(builds) == 0 {
 		return builds, "", nil
 	}
-	return builds, builds[len(builds)-1].jobID, nil
+	return builds, builds[len(builds)-1].buildNumber, nil
 }
 
 func serializeFlakes() ([]byte, error) {
@@ -182,29 +217,28 @@ func serializeFlakes() ([]byte, error) {
 		Items:       []FlakeSerializable{},
 	}
 	fMutex.RLock()
-	for flakeID, flake := range flakes {
+	for _, flake := range flakes {
 		var (
-			lastFailure Failure
+			lastFailure BuildFailure
+			builds      []string
 		)
-		var builds []string
-
 		for _, failure := range flake.failures {
 			if failure.timestamp.After(lastFailure.timestamp) {
 				lastFailure = failure
 			}
-			builds = append(builds, failure.build.jobID)
+			builds = append(builds, failure.build.buildNumber)
 		}
 		f := FlakeSerializable{
-			ID:             flakeID,
-			JobName:        lastFailure.build.job,
-			Message:        lastFailure.message,
-			FirstFailure:   flake.firstFailedAt,
-			LastFailure:    flake.lastFailedAt,
-			FailedJobs:     builds,
-			LastFailureUrl: lastFailure.build.url,
+			JobName:         lastFailure.build.name,
+			Message:         lastFailure.message,
+			FirstFailure:    flake.firstFailedAt,
+			LastFailure:     flake.lastFailedAt,
+			FailedJobs:      builds,
+			FailedJobsCount: len(builds),
+			LastFailureUrl:  lastFailure.build.url,
 		}
 		// Only serialize flakes with more than 1 occurence
-		if len(f.FailedJobs) > 1 {
+		if len(f.FailedJobs) > minFlakeJobFailures {
 			result.Items = append(result.Items, f)
 		}
 	}
@@ -213,16 +247,16 @@ func serializeFlakes() ([]byte, error) {
 
 func getFlakesForJob(name string, depth int) error {
 	var (
-		builds []Build
+		builds []Job
 		lastID string
 		err    error
 	)
 
-	glog.Infof("job %q started", name)
+	glog.Infof("name %q started", name)
 	now := time.Now()
 
 	for i := 1; i <= depth; i++ {
-		var newBuilds []Build
+		var newBuilds []Job
 		newBuilds, lastID, err = GetJobBuilds(name + lastID)
 		if err != nil {
 			return err
@@ -236,7 +270,7 @@ func getFlakesForJob(name string, depth int) error {
 		return nil
 	}
 
-	buildJobs := make(chan Build)
+	buildJobs := make(chan Job)
 	wg := &sync.WaitGroup{}
 	wg.Add(numWorkers)
 	for i := 1; i <= numWorkers; i++ {
@@ -245,7 +279,7 @@ func getFlakesForJob(name string, depth int) error {
 			for b := range buildJobs {
 				failures, err := GetBuildFailedTests(b)
 				if err != nil {
-					glog.Errorf("unable to get tests for job: %v", err)
+					glog.Errorf("unable to get tests for name: %v", err)
 				}
 				for _, f := range failures {
 					f.Record()
@@ -259,28 +293,18 @@ func getFlakesForJob(name string, depth int) error {
 	}
 	close(buildJobs)
 	wg.Wait()
-	glog.Infof("job %q finished (took %s)", name, time.Since(now))
+	glog.Infof("name %q finished (took %s)", name, time.Since(now))
 	return nil
 }
 
 func main() {
 	flag.Parse()
 
-	config := map[string]int{
-		"test_branch_origin_extended_conformance_install":        5,
-		"test_branch_origin_extended_conformance_install_update": 5,
-		"test_branch_origin_extended_conformance_gce":            5,
-		"test_pull_request_origin_unit":                          5,
-		"test_branch_request_origin_integration":                 5,
-		"test_branch_request_origin_cmd":                         5,
-		"test_branch_request_origin_end_to_end":                  5,
-	}
-
 	go func() {
 		for {
 			for jobName, depth := range config {
 				if err := getFlakesForJob(jobName, depth); err != nil {
-					glog.Errorf("error running job: %v", err)
+					glog.Errorf("error running name: %v", err)
 				}
 			}
 			time.Sleep(interval)
