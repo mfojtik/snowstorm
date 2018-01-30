@@ -38,13 +38,23 @@ var (
 	// number of pages) we want to go back when listing builds.
 	// TODO: Make this config
 	config = map[string]int{
-		"test_pull_request_origin_integration":                         5,
-		"test_pull_request_origin_unit":                                5,
-		"test_pull_request_origin_end_to_end":                          5,
-		"test_pull_request_origin_cmd":                                 5,
-		"test_pull_request_origin_extended_conformance_gce":            5,
-		"test_pull_request_origin_extended_conformance_install":        5,
-		"test_pull_request_origin_extended_conformance_install_update": 5,
+		"test_branch_origin_check":                               5,
+		"test_branch_origin_cmd":                                 5,
+		"test_branch_origin_cross":                               5,
+		"test_branch_origin_end_to_end":                          5,
+		"test_branch_origin_extended_builds":                     5,
+		"test_branch_origin_extended_conformance_crio":           5,
+		"test_branch_origin_extended_conformance_gce":            5,
+		"test_branch_origin_extended_conformance_install":        5,
+		"test_branch_origin_extended_conformance_install_update": 5,
+		"test_branch_origin_extended_conformance_k8s":            5,
+		"test_branch_origin_extended_gssapi":                     5,
+		"test_branch_origin_extended_image_ecosystem":            5,
+		"test_branch_origin_extended_ldap_groups":                5,
+		"test_branch_origin_extended_networking":                 5,
+		"test_branch_origin_extended_templates":                  5,
+		"test_branch_origin_integration":                         5,
+		"test_branch_origin_verify":                              5,
 	}
 )
 
@@ -262,7 +272,7 @@ func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure
 		return []BuildFailure{}, fmt.Errorf("could not get GCS bucket name: %v", err)
 	}
 	// we strip out the Gubernator prefix from the url to get the GCS path
-	gcsPrefix := b.url[strings.Index(b.url, attributes.Name) + len(attributes.Name) + 1:]
+	gcsPrefix := b.url[strings.Index(b.url, attributes.Name)+len(attributes.Name)+1:]
 	glog.Infof("Listing XML files for %s %s using prefix %s", b.name, b.buildNumber, gcsPrefix)
 	jobFiles := gcsBucket.Objects(ctx, &storage.Query{Prefix: gcsPrefix})
 	var xmlFiles []*storage.ObjectAttrs
@@ -343,7 +353,7 @@ func GetJobBuilds(jobName string) ([]Job, string, error) {
 	baseUrl := "https://openshift-gce-devel.appspot.com"
 	buildListUrl := strings.Join([]string{
 		baseUrl,
-		"builds/origin-ci-test/pr-logs/directory",
+		"builds/origin-ci-test/logs/directory",
 		jobName,
 	}, "/")
 	doc, err := goquery.NewDocument(buildListUrl)
