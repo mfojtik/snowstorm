@@ -255,7 +255,7 @@ func serializeFlakes() ([]byte, error) {
 			result.Items = append(result.Items, f)
 		}
 	}
-	sort.Reverse(ByCount(result.Items))
+	sort.Sort(ByCount(result.Items))
 	return json.Marshal(&result)
 }
 
