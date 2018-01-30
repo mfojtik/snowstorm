@@ -357,7 +357,7 @@ func GetJobBuilds(jobName string) ([]Job, string, error) {
 	baseUrl := "https://openshift-gce-devel.appspot.com"
 	buildListUrl := strings.Join([]string{
 		baseUrl,
-		"builds/origin-ci-test/logs/directory",
+		"builds/origin-ci-test/logs",
 		jobName,
 	}, "/")
 	doc, err := goquery.NewDocument(buildListUrl)
