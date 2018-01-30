@@ -18,8 +18,8 @@ items:
         name: snowstorm:binaries
     source:
       git:
-        ref: skuznets/junit
-        uri: https://github.com/stevekuznetsov/snowstorm.git
+        ref: master
+        uri: https://github.com/mfojtik/snowstorm.git
       type: Git
       dockerfile: |
         FROM openshift/origin-release:golang-1.9
