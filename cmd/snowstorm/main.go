@@ -255,6 +255,7 @@ type FailureOutput struct {
 }
 
 func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure, error) {
+	glog.Infof("Getting failed builds for %s %d", b.name, b.buildNumber)
 	ctx := context.Background()
 	attributes, err := gcsBucket.Attrs(ctx)
 	if err != nil {
@@ -519,7 +520,7 @@ func main() {
 	// Start server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/flakes.json", flakeHandler)
-	mux.Handle("/", http.FileServer(http.Dir("./static")))
+	mux.Handle("/", http.FileServer(http.Dir("/static")))
 
 	addr := "0.0.0.0:8080"
 	glog.Infof("Listening on %s ...", addr)

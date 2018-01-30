@@ -1,0 +1,75 @@
+apiVersion: v1
+kind: List
+items:
+- kind: ImageStream
+  apiVersion: v1
+  metadata:
+    name: snowstorm
+- kind: BuildConfig
+  apiVersion: v1
+  metadata:
+    name: snowstorm-binary
+  spec:
+    successfulBuildsHistoryLimit: 1
+    failedBuildsHistoryLimit: 2
+    output:
+      to:
+        kind: ImageStreamTag
+        name: snowstorm:binaries
+    source:
+      git:
+        ref: skuznets/junit
+        uri: https://github.com/stevekuznetsov/snowstorm.git
+      type: Git
+      dockerfile: |
+        FROM openshift/origin-release:golang-1.9
+        COPY . /go/src/github.com/mfojtik/snowstorm
+        RUN cd /go/src/github.com/mfojtik/snowstorm && \
+            mkdir -p /static && \
+            cp -r static/* /static && \
+            CGO_ENABLED=0 go install ./cmd/snowstorm/... && \
+            rm -rf /go/src /go/pkg
+    strategy:
+      dockerStrategy:
+        from:
+          kind: DockerImage
+          name: openshift/origin-release:golang-1.9
+        imageOptimizationPolicy: SkipLayers
+- apiVersion: v1
+  kind: BuildConfig
+  metadata:
+    name: snowstorm
+  spec:
+    successfulBuildsHistoryLimit: 1
+    failedBuildsHistoryLimit: 2
+    output:
+      to:
+        kind: ImageStreamTag
+        name: snowstorm:latest
+    source:
+      dockerfile: |
+        FROM        centos:7
+        COPY snowstorm /usr/bin/snowstorm
+        COPY static /static
+        ENTRYPOINT [ "/usr/bin/snowstorm", "-alsologtostderr", "-logtostderr" ]
+      images:
+      - from:
+          kind: ImageStreamTag
+          name: snowstorm:binaries
+        paths:
+        - destinationDir: .
+          sourcePath: /go/bin/snowstorm
+        - destinationDir: .
+          sourcePath: /static
+    strategy:
+      dockerStrategy:
+        from:
+          kind: DockerImage
+          name: centos:7
+        imageOptimizationPolicy: SkipLayers
+    triggers:
+    - imageChange:
+        from:
+          kind: ImageStreamTag
+          name: snowstorm:binaries
+      type: ImageChange
