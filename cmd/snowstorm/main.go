@@ -255,20 +255,21 @@ type FailureOutput struct {
 }
 
 func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure, error) {
-	glog.Infof("Getting failed builds for %s %d", b.name, b.buildNumber)
+	glog.Infof("Getting failed tests for %s %s", b.name, b.buildNumber)
 	ctx := context.Background()
 	attributes, err := gcsBucket.Attrs(ctx)
 	if err != nil {
 		return []BuildFailure{}, fmt.Errorf("could not get GCS bucket name: %v", err)
 	}
 	// we strip out the Gubernator prefix from the url to get the GCS path
-	gcsPrefix := b.url[strings.Index(b.url, attributes.Name):]
+	gcsPrefix := b.url[strings.Index(b.url, attributes.Name) + len(attributes.Name) + 1:]
+	glog.Infof("Listing XML files for %s %s using prefix %s", b.name, b.buildNumber, gcsPrefix)
 	jobFiles := gcsBucket.Objects(ctx, &storage.Query{Prefix: gcsPrefix})
 	var xmlFiles []*storage.ObjectAttrs
 	for {
 		object, done := jobFiles.Next()
 		if done != nil {
-			continue
+			break
 		}
 		if strings.HasSuffix(object.Name, ".xml") {
 			xmlFiles = append(xmlFiles, object)
@@ -290,6 +291,7 @@ func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure
 			continue
 		}
 
+		glog.Infof("Considering %s as jUnit XML for %s %s", xmlFile.Name, b.name, b.buildNumber)
 		for _, testSuite := range testSuites.Suites {
 			failures = append(failures, accumulateFailures(testSuite)...)
 		}
@@ -317,6 +319,7 @@ func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure
 			build:     b,
 		})
 	}
+	glog.Infof("Found %d failed tests for %s %s", len(buildFailures), b.name, b.buildNumber)
 	return buildFailures, nil
 }
 
@@ -335,6 +338,7 @@ func accumulateFailures(testSuite *TestSuite) []*TestCase {
 }
 
 func GetJobBuilds(jobName string) ([]Job, string, error) {
+	glog.Infof("Getting builds for job %s", jobName)
 	// TODO: make this generic?
 	baseUrl := "https://openshift-gce-devel.appspot.com"
 	buildListUrl := strings.Join([]string{
@@ -413,6 +417,7 @@ func serializeFlakes() ([]byte, error) {
 }
 
 func getFlakesForJob(name string, depth int, gcsBucket *storage.BucketHandle) error {
+	glog.Infof("Finding flakes for job %s", name)
 	var (
 		builds []Job
 		lastID string
