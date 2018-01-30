@@ -30,10 +30,6 @@ var (
 	// interval is how often we run the scrubbing name
 	interval = 1800 * time.Second
 
-	// minFlakeJobFailures is the minimum number of failures required to consider the
-	// test failure as a 'flake'
-	minFlakeJobFailures = 2
-
 	// config lists the job names we want to scape and the depth (
 	// number of pages) we want to go back when listing builds.
 	// TODO: Make this config
@@ -416,7 +412,7 @@ func serializeFlakes() ([]byte, error) {
 			}
 			builds = append(builds, failure.build.buildNumber)
 		}
-		f := FlakeSerializable{
+		result.Items = append(result.Items, FlakeSerializable{
 			JobName:         lastFailure.build.name,
 			Message:         lastFailure.message,
 			FirstFailure:    flake.firstFailedAt,
@@ -424,11 +420,7 @@ func serializeFlakes() ([]byte, error) {
 			FailedJobs:      builds,
 			FailedJobsCount: len(builds),
 			LastFailureUrl:  lastFailure.build.url,
-		}
-		// Only serialize flakes with more than 1 occurence
-		if len(f.FailedJobs) > minFlakeJobFailures {
-			result.Items = append(result.Items, f)
-		}
+		})
 	}
 	sort.Sort(ByCount(result.Items))
 	return json.Marshal(&result)
@@ -495,16 +487,12 @@ Usage: %s [-interval <sec>] [-workers <sec>] [-min-flake-failures <sec>]
 }
 
 func main() {
-	minFlakeFailuresFlag := flag.Uint("min-flake-failures", 2, "minumum failures to consider a flake")
 	intervalFlag := flag.Uint("interval", 3600, "interval in seconds to run scrapper")
-	workersFlag := flag.Uint("workers", 8, "interval in seconds to run scrapper")
+	workersFlag := flag.Uint("workers", 20, "number of worker threads to use")
 
 	flag.Usage = Usage
 	flag.Parse()
 
-	if minFlakeFailuresFlag != nil {
-		minFlakeJobFailures = int(*minFlakeFailuresFlag)
-	}
 	if intervalFlag != nil {
 		interval = time.Second * time.Duration(*intervalFlag)
 	}
