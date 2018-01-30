@@ -294,15 +294,23 @@ func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure
 			glog.Warningf("XML file did not exist when read: %v", err)
 			continue
 		}
+
+		var suites []*TestSuite
 		var testSuites TestSuites
 		if err := xml.NewDecoder(xmlReader).Decode(&testSuites); err != nil {
-			// not all XML is jUnit and that is ok
-			glog.Warningf("Could not parse XML file %s as jUnit: %v", xmlFile.Name, err)
-			continue
+			var testSuite TestSuite
+			if err := xml.NewDecoder(xmlReader).Decode(&testSuite); err != nil {
+				// not all XML is jUnit and that is ok
+				glog.Warningf("Could not parse XML file %s as jUnit: %v", xmlFile.Name, err)
+				continue
+			}
+			suites = append(suites, &testSuite)
+		} else {
+			suites = append(suites, testSuites.Suites...)
 		}
 
 		glog.Infof("Considering %s as jUnit XML for %s %s", xmlFile.Name, b.name, b.buildNumber)
-		for _, testSuite := range testSuites.Suites {
+		for _, testSuite := range suites {
 			failures = append(failures, accumulateFailures(testSuite)...)
 		}
 	}
