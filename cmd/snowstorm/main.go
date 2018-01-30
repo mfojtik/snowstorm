@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"encoding/xml"
 	"flag"
 	"fmt"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"cloud.google.com/go/storage"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/golang/glog"
 )
@@ -155,7 +158,142 @@ func unixToTime(s string) *time.Time {
 	return &t
 }
 
-func GetBuildFailedTests(b Job) ([]BuildFailure, error) {
+// The below types are directly marshalled into XML. The types correspond to jUnit
+// XML schema, but do not contain all valid fields. For instance, the class name
+// field for test cases is omitted, as this concept does not directly apply to Go.
+// For XML specifications see http://help.catchsoftware.com/display/ET/JUnit+Format
+// or view the XSD included in this package as 'junit.xsd'
+
+// TestSuites represents a flat collection of jUnit test suites.
+type TestSuites struct {
+	XMLName xml.Name `xml:"testsuites"`
+
+	// Suites are the jUnit test suites held in this collection
+	Suites []*TestSuite `xml:"testsuite"`
+}
+
+// TestSuite represents a single jUnit test suite, potentially holding child suites.
+type TestSuite struct {
+	XMLName xml.Name `xml:"testsuite"`
+
+	// Name is the name of the test suite
+	Name string `xml:"name,attr"`
+
+	// NumTests records the number of tests in the TestSuite
+	NumTests uint `xml:"tests,attr"`
+
+	// NumSkipped records the number of skipped tests in the suite
+	NumSkipped uint `xml:"skipped,attr"`
+
+	// NumFailed records the number of failed tests in the suite
+	NumFailed uint `xml:"failures,attr"`
+
+	// Duration is the time taken in seconds to run all tests in the suite
+	Duration float64 `xml:"time,attr"`
+
+	// Properties holds other properties of the test suite as a mapping of name to value
+	Properties []*TestSuiteProperty `xml:"properties,omitempty"`
+
+	// TestCases are the test cases contained in the test suite
+	TestCases []*TestCase `xml:"testcase"`
+
+	// Children holds nested test suites
+	Children []*TestSuite `xml:"testsuite"`
+}
+
+// TestSuiteProperty contains a mapping of a property name to a value
+type TestSuiteProperty struct {
+	XMLName xml.Name `xml:"property"`
+
+	Name  string `xml:"name,attr"`
+	Value string `xml:"value,attr"`
+}
+
+// TestCase represents a jUnit test case
+type TestCase struct {
+	XMLName xml.Name `xml:"testcase"`
+
+	// Name is the name of the test case
+	Name string `xml:"name,attr"`
+
+	// Classname is an attribute set by the package type and is required
+	Classname string `xml:"classname,attr,omitempty"`
+
+	// Duration is the time taken in seconds to run the test
+	Duration float64 `xml:"time,attr"`
+
+	// SkipMessage holds the reason why the test was skipped
+	SkipMessage *SkipMessage `xml:"skipped"`
+
+	// FailureOutput holds the output from a failing test
+	FailureOutput *FailureOutput `xml:"failure"`
+
+	// SystemOut is output written to stdout during the execution of this test case
+	SystemOut string `xml:"system-out,omitempty"`
+
+	// SystemErr is output written to stderr during the execution of this test case
+	SystemErr string `xml:"system-err,omitempty"`
+}
+
+// SkipMessage holds a message explaining why a test was skipped
+type SkipMessage struct {
+	XMLName xml.Name `xml:"skipped"`
+
+	// Message explains why the test was skipped
+	Message string `xml:"message,attr,omitempty"`
+}
+
+// FailureOutput holds the output from a failing test
+type FailureOutput struct {
+	XMLName xml.Name `xml:"failure"`
+
+	// Message holds the failure message from the test
+	Message string `xml:"message,attr"`
+
+	// Output holds verbose failure output from the test
+	Output string `xml:",chardata"`
+}
+
+func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure, error) {
+	ctx := context.Background()
+	attributes, err := gcsBucket.Attrs(ctx)
+	if err != nil {
+		return []BuildFailure{}, fmt.Errorf("could not get GCS bucket name: %v", err)
+	}
+	// we strip out the Gubernator prefix from the url to get the GCS path
+	gcsPrefix := b.url[strings.Index(b.url, attributes.Name):]
+	jobFiles := gcsBucket.Objects(ctx, &storage.Query{Prefix: gcsPrefix})
+	var xmlFiles []*storage.ObjectAttrs
+	for {
+		object, done := jobFiles.Next()
+		if done != nil {
+			continue
+		}
+		if strings.HasSuffix(object.Name, ".xml") {
+			xmlFiles = append(xmlFiles, object)
+		}
+	}
+
+	var failures []*TestCase
+	for _, xmlFile := range xmlFiles {
+		xmlReader, err := gcsBucket.Object(xmlFile.Name).NewReader(ctx)
+		if err != nil {
+			// this should not happen
+			glog.Warningf("XML file did not exist when read: %v", err)
+			continue
+		}
+		var testSuites TestSuites
+		if err := xml.NewDecoder(xmlReader).Decode(&testSuites); err != nil {
+			// not all XML is jUnit and that is ok
+			glog.Warningf("Could not parse XML file %s as jUnit: %v", xmlFile.Name, err)
+			continue
+		}
+
+		for _, testSuite := range testSuites.Suites {
+			failures = append(failures, accumulateFailures(testSuite)...)
+		}
+	}
+
 	doc, err := goquery.NewDocument(b.url)
 	if err != nil {
 		return nil, err
@@ -169,16 +307,30 @@ func GetBuildFailedTests(b Job) ([]BuildFailure, error) {
 	if timestamp == nil {
 		return nil, fmt.Errorf("unable to get timestamp")
 	}
-	var failures []BuildFailure
-	doc.Find("#failures h3 a").Each(func(i int, s *goquery.Selection) {
-		s.ChildrenFiltered(".time").Remove()
-		failures = append(failures, BuildFailure{
-			message:   strings.TrimSpace(s.Text()),
-			build:     b,
+
+	var buildFailures []BuildFailure
+	for _, failure := range failures {
+		buildFailures = append(buildFailures, BuildFailure{
+			message:   failure.Name,
 			timestamp: *timestamp,
+			build:     b,
 		})
-	})
-	return failures, nil
+	}
+	return buildFailures, nil
+}
+
+func accumulateFailures(testSuite *TestSuite) []*TestCase {
+	var failures []*TestCase
+	for _, testCase := range testSuite.TestCases {
+		if testCase.FailureOutput != nil {
+			failures = append(failures, testCase)
+		}
+	}
+
+	for _, childSuite := range testSuite.Children {
+		failures = append(failures, accumulateFailures(childSuite)...)
+	}
+	return failures
 }
 
 func GetJobBuilds(jobName string) ([]Job, string, error) {
@@ -259,7 +411,7 @@ func serializeFlakes() ([]byte, error) {
 	return json.Marshal(&result)
 }
 
-func getFlakesForJob(name string, depth int) error {
+func getFlakesForJob(name string, depth int, gcsBucket *storage.BucketHandle) error {
 	var (
 		builds []Job
 		lastID string
@@ -291,7 +443,7 @@ func getFlakesForJob(name string, depth int) error {
 		go func() {
 			defer wg.Done()
 			for b := range buildJobs {
-				failures, err := GetBuildFailedTests(b)
+				failures, err := GetBuildFailedTests(b, gcsBucket)
 				if err != nil {
 					glog.Errorf("unable to get tests for name: %v", err)
 				}
@@ -336,10 +488,17 @@ func main() {
 		numWorkers = int(*workersFlag)
 	}
 
+	ctx := context.Background()
+	gcsClient, err := storage.NewClient(ctx)
+	if err != nil {
+		glog.Fatalf("Could not connect to GCS: %v", err)
+	}
+	gcsBucket := gcsClient.Bucket("origin-ci-test")
+
 	go func() {
 		for {
 			for jobName, depth := range config {
-				if err := getFlakesForJob(jobName, depth); err != nil {
+				if err := getFlakesForJob(jobName, depth, gcsBucket); err != nil {
 					glog.Errorf("error running name: %v", err)
 				}
 			}
