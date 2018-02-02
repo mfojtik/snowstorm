@@ -40,9 +40,17 @@ items:
         containers:
         - name: snowstorm
           image: snowstorm:latest
+          command: ["/usr/bin/snowstorm", "--alsologtostderr", "-config=/etc/snowstorm/config"]
+          volumeMounts:
+          - mountPath: /etc/snowstorm
+            name: snowstorm-config
           ports:
             - name: http
               containerPort: 8080
+    volumes:
+    - name: snowstorm-config
+      configMap:
+        name: snowstorm-config
     triggers:
     - type: ConfigChange
     - imageChangeParams:

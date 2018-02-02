@@ -18,40 +18,15 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/PuerkitoBio/goquery"
 	"github.com/golang/glog"
+	"google.golang.org/api/option"
+
+	"github.com/mfojtik/snowstorm/cmd/snowstorm/types"
 )
 
 var (
 	flakes = map[string]Flake{}
 	fMutex sync.RWMutex
-
-	// numWorkers is how much parallel we want to be
-	numWorkers = 8
-
-	// interval is how often we run the scrubbing name
-	interval = 1800 * time.Second
-
-	// config lists the job names we want to scape and the depth (
-	// number of pages) we want to go back when listing builds.
-	// TODO: Make this config
-	config = map[string]int{
-		"test_branch_origin_check":                               5,
-		"test_branch_origin_cmd":                                 5,
-		"test_branch_origin_cross":                               5,
-		"test_branch_origin_end_to_end":                          5,
-		"test_branch_origin_extended_builds":                     5,
-		"test_branch_origin_extended_conformance_crio":           5,
-		"test_branch_origin_extended_conformance_gce":            5,
-		"test_branch_origin_extended_conformance_install":        5,
-		"test_branch_origin_extended_conformance_install_update": 5,
-		"test_branch_origin_extended_conformance_k8s":            5,
-		"test_branch_origin_extended_gssapi":                     5,
-		"test_branch_origin_extended_image_ecosystem":            5,
-		"test_branch_origin_extended_ldap_groups":                5,
-		"test_branch_origin_extended_networking":                 5,
-		"test_branch_origin_extended_templates":                  5,
-		"test_branch_origin_integration":                         5,
-		"test_branch_origin_verify":                              5,
-	}
+	config *types.Config
 )
 
 // FlakeSerializable is serializable version of the 'flake'
@@ -129,6 +104,7 @@ func (f BuildFailure) Record() {
 		if f.timestamp.Before(flake.firstFailedAt) {
 			flake.firstFailedAt = f.timestamp
 		}
+
 		flakes[f.Hash()] = flake
 		return
 	}
@@ -164,112 +140,10 @@ func unixToTime(s string) *time.Time {
 	return &t
 }
 
-// The below types are directly marshalled into XML. The types correspond to jUnit
-// XML schema, but do not contain all valid fields. For instance, the class name
-// field for test cases is omitted, as this concept does not directly apply to Go.
-// For XML specifications see http://help.catchsoftware.com/display/ET/JUnit+Format
-// or view the XSD included in this package as 'junit.xsd'
-
-// TestSuites represents a flat collection of jUnit test suites.
-type TestSuites struct {
-	XMLName xml.Name `xml:"testsuites"`
-
-	// Suites are the jUnit test suites held in this collection
-	Suites []*TestSuite `xml:"testsuite"`
-}
-
-// TestSuite represents a single jUnit test suite, potentially holding child suites.
-type TestSuite struct {
-	XMLName xml.Name `xml:"testsuite"`
-
-	// Name is the name of the test suite
-	Name string `xml:"name,attr"`
-
-	// NumTests records the number of tests in the TestSuite
-	NumTests uint `xml:"tests,attr"`
-
-	// NumSkipped records the number of skipped tests in the suite
-	NumSkipped uint `xml:"skipped,attr"`
-
-	// NumFailed records the number of failed tests in the suite
-	NumFailed uint `xml:"failures,attr"`
-
-	// Duration is the time taken in seconds to run all tests in the suite
-	Duration float64 `xml:"time,attr"`
-
-	// Properties holds other properties of the test suite as a mapping of name to value
-	Properties []*TestSuiteProperty `xml:"properties,omitempty"`
-
-	// TestCases are the test cases contained in the test suite
-	TestCases []*TestCase `xml:"testcase"`
-
-	// Children holds nested test suites
-	Children []*TestSuite `xml:"testsuite"`
-}
-
-// TestSuiteProperty contains a mapping of a property name to a value
-type TestSuiteProperty struct {
-	XMLName xml.Name `xml:"property"`
-
-	Name  string `xml:"name,attr"`
-	Value string `xml:"value,attr"`
-}
-
-// TestCase represents a jUnit test case
-type TestCase struct {
-	XMLName xml.Name `xml:"testcase"`
-
-	// Name is the name of the test case
-	Name string `xml:"name,attr"`
-
-	// Classname is an attribute set by the package type and is required
-	Classname string `xml:"classname,attr,omitempty"`
-
-	// Duration is the time taken in seconds to run the test
-	Duration float64 `xml:"time,attr"`
-
-	// SkipMessage holds the reason why the test was skipped
-	SkipMessage *SkipMessage `xml:"skipped"`
-
-	// FailureOutput holds the output from a failing test
-	FailureOutput *FailureOutput `xml:"failure"`
-
-	// SystemOut is output written to stdout during the execution of this test case
-	SystemOut string `xml:"system-out,omitempty"`
-
-	// SystemErr is output written to stderr during the execution of this test case
-	SystemErr string `xml:"system-err,omitempty"`
-}
-
-// SkipMessage holds a message explaining why a test was skipped
-type SkipMessage struct {
-	XMLName xml.Name `xml:"skipped"`
-
-	// Message explains why the test was skipped
-	Message string `xml:"message,attr,omitempty"`
-}
-
-// FailureOutput holds the output from a failing test
-type FailureOutput struct {
-	XMLName xml.Name `xml:"failure"`
-
-	// Message holds the failure message from the test
-	Message string `xml:"message,attr"`
-
-	// Output holds verbose failure output from the test
-	Output string `xml:",chardata"`
-}
-
 func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure, error) {
 	glog.Infof("Getting failed tests for %s %s", b.name, b.buildNumber)
 	ctx := context.Background()
-	attributes, err := gcsBucket.Attrs(ctx)
-	if err != nil {
-		return []BuildFailure{}, fmt.Errorf("could not get GCS bucket name: %v", err)
-	}
-	// we strip out the Gubernator prefix from the url to get the GCS path
-	gcsPrefix := b.url[strings.Index(b.url, attributes.Name)+len(attributes.Name)+1:]
-	glog.Infof("Listing XML files for %s %s using prefix %s", b.name, b.buildNumber, gcsPrefix)
+	gcsPrefix := b.url[strings.Index(b.url, config.BucketName)+len(config.BucketName)+1:]
 	jobFiles := gcsBucket.Objects(ctx, &storage.Query{Prefix: gcsPrefix})
 	var xmlFiles []*storage.ObjectAttrs
 	for {
@@ -282,7 +156,7 @@ func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure
 		}
 	}
 
-	var failures []*TestCase
+	var failures []*types.TestCase
 	for _, xmlFile := range xmlFiles {
 		xmlReader, err := gcsBucket.Object(xmlFile.Name).NewReader(ctx)
 		if err != nil {
@@ -291,8 +165,8 @@ func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure
 			continue
 		}
 
-		var suites []*TestSuite
-		var testSuites TestSuites
+		var suites []*types.TestSuite
+		var testSuites types.TestSuites
 		if err := xml.NewDecoder(xmlReader).Decode(&testSuites); err != nil {
 			xmlReader.Close()
 			// Need to re-open the reader to try to parse it again
@@ -302,7 +176,7 @@ func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure
 				glog.Warningf("XML file did not exist when read: %v", err)
 				continue
 			}
-			var testSuite TestSuite
+			var testSuite types.TestSuite
 			if err := xml.NewDecoder(xmlReader).Decode(&testSuite); err != nil {
 				// not all XML is jUnit and that is ok
 				xmlReader.Close()
@@ -314,8 +188,6 @@ func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure
 		} else {
 			suites = append(suites, testSuites.Suites...)
 		}
-
-		glog.Infof("Considering %s as jUnit XML for %s %s", xmlFile.Name, b.name, b.buildNumber)
 		for _, testSuite := range suites {
 			failures = append(failures, accumulateFailures(testSuite)...)
 		}
@@ -347,8 +219,8 @@ func GetBuildFailedTests(b Job, gcsBucket *storage.BucketHandle) ([]BuildFailure
 	return buildFailures, nil
 }
 
-func accumulateFailures(testSuite *TestSuite) []*TestCase {
-	var failures []*TestCase
+func accumulateFailures(testSuite *types.TestSuite) []*types.TestCase {
+	var failures []*types.TestCase
 	for _, testCase := range testSuite.TestCases {
 		if testCase.FailureOutput != nil {
 			failures = append(failures, testCase)
@@ -362,7 +234,6 @@ func accumulateFailures(testSuite *TestSuite) []*TestCase {
 }
 
 func GetJobBuilds(jobName string) ([]Job, string, error) {
-	glog.Infof("Getting builds for job %s", jobName)
 	// TODO: make this generic?
 	baseUrl := "https://openshift-gce-devel.appspot.com"
 	buildListUrl := strings.Join([]string{
@@ -422,11 +293,15 @@ func serializeFlakes() ([]byte, error) {
 			}
 			builds = append(builds, failure.build.buildNumber)
 		}
+		if time.Since(lastFailure.timestamp).Hours() > float64(config.SkipFlakeAfterDays*24) {
+			continue
+		}
+
 		result.Items = append(result.Items, FlakeSerializable{
 			JobName:         lastFailure.build.name,
 			Message:         lastFailure.message,
 			FirstFailure:    flake.firstFailedAt,
-			LastFailure:     flake.lastFailedAt,
+			LastFailure:     lastFailure.timestamp,
 			FailedJobs:      builds,
 			FailedJobsCount: len(builds),
 			LastFailureUrl:  lastFailure.build.url,
@@ -437,14 +312,12 @@ func serializeFlakes() ([]byte, error) {
 }
 
 func getFlakesForJob(name string, depth int, gcsBucket *storage.BucketHandle) error {
-	glog.Infof("Finding flakes for job %s", name)
 	var (
 		builds []Job
 		lastID string
 		err    error
 	)
 
-	glog.Infof("name %q started", name)
 	now := time.Now()
 
 	for i := 1; i <= depth; i++ {
@@ -464,8 +337,8 @@ func getFlakesForJob(name string, depth int, gcsBucket *storage.BucketHandle) er
 
 	buildJobs := make(chan Job)
 	wg := &sync.WaitGroup{}
-	wg.Add(numWorkers)
-	for i := 1; i <= numWorkers; i++ {
+	wg.Add(config.WorkerCount)
+	for i := 1; i <= config.WorkerCount; i++ {
 		go func() {
 			defer wg.Done()
 			for b := range buildJobs {
@@ -485,46 +358,49 @@ func getFlakesForJob(name string, depth int, gcsBucket *storage.BucketHandle) er
 	}
 	close(buildJobs)
 	wg.Wait()
-	glog.Infof("name %q finished (took %s)", name, time.Since(now))
+	glog.Infof("name %q finished (elapsed %s)", name, time.Since(now))
 	return nil
 }
 
 func Usage() {
 	fmt.Fprintf(os.Stderr, `
-Usage: %s [-interval <sec>] [-workers <sec>] [-min-flake-failures <sec>]
+Usage: %s [-config <string>]
 `, os.Args[0])
 	flag.PrintDefaults()
 }
 
 func main() {
-	intervalFlag := flag.Uint("interval", 3600, "interval in seconds to run scrapper")
-	workersFlag := flag.Uint("workers", 20, "number of worker threads to use")
-
+	configPath := flag.String("config", "", "a path to a config file to use")
+	staticPathFlag := flag.String("static-path", "/static", "override the directory with HTML files")
 	flag.Usage = Usage
 	flag.Parse()
 
-	if intervalFlag != nil {
-		interval = time.Second * time.Duration(*intervalFlag)
+	var err error
+	config, err = types.ParseConfig(*configPath)
+	if err != nil {
+		glog.Fatalf("error reading config %q: %v", *configPath, err)
 	}
-	if workersFlag != nil {
-		numWorkers = int(*workersFlag)
+
+	staticPath := ""
+	if *staticPathFlag != "" {
+		staticPath = *staticPathFlag
 	}
 
 	ctx := context.Background()
-	gcsClient, err := storage.NewClient(ctx)
+	gcsClient, err := storage.NewClient(ctx, option.WithoutAuthentication())
 	if err != nil {
 		glog.Fatalf("Could not connect to GCS: %v", err)
 	}
-	gcsBucket := gcsClient.Bucket("origin-ci-test")
+	gcsBucket := gcsClient.Bucket(config.BucketName)
 
 	go func() {
 		for {
-			for jobName, depth := range config {
-				if err := getFlakesForJob(jobName, depth, gcsBucket); err != nil {
+			for _, job := range config.Jobs {
+				if err := getFlakesForJob(job.Name, config.Depth, gcsBucket); err != nil {
 					glog.Errorf("error running name: %v", err)
 				}
 			}
-			time.Sleep(interval)
+			time.Sleep(time.Duration(config.IntervalSeconds) * time.Second)
 		}
 	}()
 
@@ -541,7 +417,7 @@ func main() {
 	// Start server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/flakes.json", flakeHandler)
-	mux.Handle("/", http.FileServer(http.Dir("/static")))
+	mux.Handle("/", http.FileServer(http.Dir(staticPath)))
 
 	addr := "0.0.0.0:8080"
 	glog.Infof("Listening on %s ...", addr)

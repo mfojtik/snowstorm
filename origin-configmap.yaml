@@ -1,0 +1,28 @@
+kind: ConfigMap
+metadata:
+  name: snowstorm-config
+data:
+  config: |
+    bucket-name: origin-ci-test
+    skip-flake-after-days: 14
+    min-flake-count: 2
+    worker-count: 8
+    interval-seconds: 1800
+    depth: 5
+    source-jobs:
+    - name: test_branch_origin_check
+    - name: test_branch_origin_cmd
+    - name: test_branch_origin_cross
+    - name: test_branch_origin_end_to_end
+    - name: test_branch_origin_integration
+    - name: test_branch_origin_verify
+    - name: test_branch_origin_extended_conformance_crio
+    - name: test_branch_origin_extended_conformance_gce
+    - name: test_branch_origin_extended_conformance_install
+    - name: test_branch_origin_extended_conformance_install_update
+    - name: test_branch_origin_extended_conformance_k8s
+    - name: test_branch_origin_extended_gssapi
+    - name: test_branch_origin_extended_image_ecosystem
+    - name: test_branch_origin_extended_ldap_groups
+    - name: test_branch_origin_extended_networking
+    - name: test_branch_origin_extended_templates
