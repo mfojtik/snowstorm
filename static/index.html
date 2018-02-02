@@ -6,10 +6,27 @@
     <link rel="stylesheet" type="text/css" href="https://cdnjs.cloudflare.com/ajax/libs/patternfly/3.24.0/css/patternfly-additions.min.css">
     <script src="https://code.jquery.com/jquery-3.3.1.min.js"></script>
     <script src="jquery.timeago.js"></script>
+    <script src="http://www.patternfly.org/angular-patternfly/grunt-scripts/bootstrap.min.js"></script>
+    <script src="http://www.patternfly.org/angular-patternfly/grunt-scripts/bootstrap-select.js"></script>
+    <script src="http://www.patternfly.org/angular-patternfly/grunt-scripts/jquery-ui.min.js"></script>
     <title>Snowstorm</title>
 </head>
 <body>
 <div class="container">
+        <div class="row" style="margin-bottom:5px;margin-top:5px">
+            <div class="col-sm-12">
+                <form class="toolbar-pf-action-right toolbar-pf-filter">
+                    <div class="input-group">
+                        <div class="input-group-btn">
+                    <button type="button" class="btn btn-default dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Filter By Job <span class="caret"></span></button>
+                    <ul class="dropdown-menu" id="jobNames">
+                    </ul>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
 <table class="table table-striped table-bordered">
     <thead>
     <tr><th>Test Case</th><th>Count</th><th>First Failure</th><th>Last Failure</th></tr>
@@ -20,11 +37,24 @@
 </div>
 </body>
 <script type="application/javascript">
+
+var ONE_DAY = 24 * 60 * 60 * 1000; /* ms */
+
 function getFlakes() {
     return $.getJSON("flakes.json").then(function (data) {
         return data.items;
     });
 }
+
+$.extend({
+    distinct : function(anArray) {
+       var result = [];
+       $.each(anArray, function(i,v){
+           if ($.inArray(v, result) == -1) result.push(v);
+       });
+       return result;
+    }
+});
 
 String.prototype.trimToLength = function(m) {
   return (this.length > m)
@@ -33,16 +63,33 @@ String.prototype.trimToLength = function(m) {
 };
 
 getFlakes().done(function (items) {
+    var jobNames = [];
     $.each(items, function( index, flake) {
         flake.message = flake.message.replace('github.com/openshift/origin/test/integration/runner','')
         flake.message = flake.message.replace('github.com/openshift/origin/test/cmd/util/','')
-        $('tbody#data').prepend('<tr>'+
+        $('tbody#data').prepend('<tr job-name="'+flake.jobName+'">'+
         '<td title="'+flake.message+'"><a href="'+flake.lastFailureUrl+'">'+flake.message.trimToLength(140)+'</a></td>'+
         '<td>'+flake.failedJobsCount+'</td>'+
         '<td><abbr class="timeago" title="'+flake.firstFailure+'"></abbr></td>'+
         '<td><abbr class="timeago" title="'+flake.lastFailure+'"></abbr></td>'+
         '</tr>');
+        jobNames.push(flake.jobName);
         $("abbr.timeago").timeago();
+    });
+    $.each($.distinct(jobNames), function(index, job) {
+      $("#jobNames").append('<li><a href="#">'+job+'</a></li>')
+    });
+    $('#jobNames li a').click(function(event) {
+        event.preventDefault();
+        var filter = $(this).text();
+        $('#jobNames li').removeClass('selected');
+        $('tbody#data tr').show();
+        $('tbody#data tr').each(function(i, row) {
+            if ($(row).attr('job-name') != filter) {
+                $(row).hide();
+            }
+        });
+        $(this).parent().addClass('selected');
     });
 });
 
