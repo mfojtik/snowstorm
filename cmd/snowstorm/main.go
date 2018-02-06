@@ -238,7 +238,7 @@ func GetJobBuilds(jobName string) ([]Job, string, error) {
 	baseUrl := "https://openshift-gce-devel.appspot.com"
 	buildListUrl := strings.Join([]string{
 		baseUrl,
-		"builds/origin-ci-test/logs",
+		"builds/origin-ci-test/pr-logs/directory",
 		jobName,
 	}, "/")
 	doc, err := goquery.NewDocument(buildListUrl)
@@ -293,10 +293,12 @@ func serializeFlakes() ([]byte, error) {
 			}
 			builds = append(builds, failure.build.buildNumber)
 		}
-		if time.Since(lastFailure.timestamp).Hours() > float64(config.SkipFlakeAfterDays*24) {
+		if time.Since(lastFailure.timestamp).Hours() > float64(config.SkipFlakeAfterHours) {
 			continue
 		}
-
+		if len(builds) < config.MinimumFlakeCount {
+			continue
+		}
 		result.Items = append(result.Items, FlakeSerializable{
 			JobName:         lastFailure.build.name,
 			Message:         lastFailure.message,

@@ -1,0 +1,18 @@
+bucket-name: origin-ci-test
+skip-flake-after-hours: 5
+min-flake-count: 3
+worker-count: 10
+interval-seconds: 1800
+depth: 10
+source-jobs:
+- name: test_pull_request_origin_integration
+- name: test_pull_request_origin_unit
+- name: test_pull_request_origin_end_to_end
+- name: test_pull_request_origin_cmd
+- name: test_pull_request_origin_extended_conformance_gce
+- name: test_pull_request_origin_extended_conformance_install
+- name: test_pull_request_origin_extended_conformance_install_update
+- name: test_pull_request_origin_extended_builds
+- name: test_pull_request_origin_extended_gssapi
+- name: test_pull_request_origin_extended_image_registry
+- name: test_pull_request_origin_extended_networking_minimal

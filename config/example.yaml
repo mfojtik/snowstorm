@@ -1,5 +1,5 @@
 bucket-name: origin-ci-test
-skip-flake-after-days: 5
+skip-flake-after-hours: 120
 min-flake-count: 2
 worker-count: 8
 interval-seconds: 1800

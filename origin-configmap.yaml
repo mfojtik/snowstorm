@@ -4,7 +4,7 @@ metadata:
 data:
   config: |
     bucket-name: origin-ci-test
-    skip-flake-after-days: 14
+    skip-flake-after-hours: 5
     min-flake-count: 2
     worker-count: 8
     interval-seconds: 1800

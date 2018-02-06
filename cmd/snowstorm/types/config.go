@@ -17,9 +17,9 @@ type Config struct {
 	// MinimumFlakeCount is a count of failures to occur before we consider the failure as a flake.
 	MinimumFlakeCount int `yaml:"min-flake-count"`
 
-	// SkipFlakeAfterDays is number of days that has to pass after last observation of the flake
+	// SkipFlakeAfterHours is number of hours that has to pass after last observation of the flake
 	// to remove the flake from the list.
-	SkipFlakeAfterDays int `yaml:"skip-flake-after-days"`
+	SkipFlakeAfterHours int `yaml:"skip-flake-after-hours"`
 
 	// WorkerCount is number of workers we want to run to crawl the Gubernator. Higher number increase
 	// the concurrency but might break Gubernator ;-)
