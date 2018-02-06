@@ -14,7 +14,7 @@
 <body>
 <div class="container">
         <div class="row" style="margin-bottom:5px;margin-top:5px">
-            <div class="col-sm-12">
+            <div class="col-sm-8">
                 <form class="toolbar-pf-action-right toolbar-pf-filter">
                     <div class="input-group">
                         <div class="input-group-btn">
@@ -23,7 +23,15 @@
                     </ul>
                         </div>
                     </div>
+
                 </form>
+            </div>
+            <div class="col-sm-4">
+                <ul class="list-inline" style="text-align:right;">
+                    <li><a href="?h=5">Last 5 hours</a></li>
+                    <li><a href="?h=24">Last 24 hours</a></li>
+                    <li><a href="?h=48">Last 48 hours</a></li>
+                </ul>
             </div>
         </div>
 
@@ -41,10 +49,27 @@
 var ONE_DAY = 24 * 60 * 60 * 1000; /* ms */
 
 function getFlakes() {
-    return $.getJSON("flakes.json").then(function (data) {
+    return $.getJSON("flakes.json?skip-flake-after-hours="+$.getUrlVar('h')).then(function (data) {
         return data.items;
     });
 }
+
+$.extend({
+  getUrlVars: function(){
+    var vars = [], hash;
+      var hashes = window.location.href.slice(window.location.href.indexOf('?') + 1).split('&');
+      for(var i = 0; i < hashes.length; i++)
+      {
+        hash = hashes[i].split('=');
+        vars.push(hash[0]);
+        vars[hash[0]] = hash[1];
+      }
+      return vars;
+    },
+    getUrlVar: function(name){
+      return $.getUrlVars()[name];
+    }
+});
 
 $.extend({
     distinct : function(anArray) {

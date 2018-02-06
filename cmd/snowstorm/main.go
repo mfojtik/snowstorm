@@ -274,7 +274,7 @@ func (a ByCount) Len() int           { return len(a) }
 func (a ByCount) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByCount) Less(i, j int) bool { return a[i].FailedJobsCount < a[j].FailedJobsCount }
 
-func serializeFlakes() ([]byte, error) {
+func serializeFlakes(skipFlakeHours int) ([]byte, error) {
 	defer fMutex.RUnlock()
 	result := FlakesSerializable{
 		Count:       len(flakes),
@@ -293,7 +293,7 @@ func serializeFlakes() ([]byte, error) {
 			}
 			builds = append(builds, failure.build.buildNumber)
 		}
-		if time.Since(lastFailure.timestamp).Hours() > float64(config.SkipFlakeAfterHours) {
+		if time.Since(lastFailure.timestamp).Hours() > float64(skipFlakeHours) {
 			continue
 		}
 		if len(builds) < config.MinimumFlakeCount {
@@ -407,7 +407,15 @@ func main() {
 	}()
 
 	flakeHandler := func(w http.ResponseWriter, r *http.Request) {
-		out, err := serializeFlakes()
+		skipFlakeAfterHours := config.SkipFlakeAfterHours
+		skipFlakeAfterHoursParam := r.URL.Query().Get("skip-flake-after-hours")
+		if len(skipFlakeAfterHoursParam) > 0 {
+			v, err := strconv.ParseInt(skipFlakeAfterHoursParam, 10, 64)
+			if err == nil {
+				skipFlakeAfterHours = int(v)
+			}
+		}
+		out, err := serializeFlakes(skipFlakeAfterHours)
 		if err != nil {
 			w.WriteHeader(500)
 			w.Write([]byte(fmt.Sprintf("internal error: %v", err)))
